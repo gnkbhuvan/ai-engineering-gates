@@ -24,24 +24,28 @@ python benchmarks/analyze.py benchmarks/results/<stamp>/results.json
 
 ## How it works
 
-Quick summary:
+Two suites, in Anthropic's eval vocabulary ([Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)):
 
-1. **Selftest** validates every scorer — good reference passes, bad reference fails on its declared axis
-2. **Behavioral gates** verify each skill actually changes agent behavior (not just carries text)
-3. **Deterministic correctness** checks each skill produces correct answers to tasks with right answers
-4. **LLM judge** scores subjective axes (clarity, reasoning depth) with a validated rubric
-5. **Comparative baselines** run the same tasks with no skill vs. your skill vs. naive instructions
+- **Regression suite** (`selftest.py` + `behavior.py`) — deterministic, no API, should stay near 100%. Catches the instruments themselves breaking, or a skill edit silently undoing a behavior it used to guarantee.
+- **Capability suite** (`tasks.py` + `runner.py`) — real model calls, lower pass rate expected. Each (task × arm) cell runs **3 trials**, not 1 — single runs are unreliable (output varies run to run). We report `pass@3` (at least one of 3 trials correct) and `pass^3` (all 3 correct), per Anthropic's `pass@k`/`pass^k` metrics.
+- **LLM judge** (`judge.py`) scores subjective axes (clarity, reasoning depth, simplicity bias) on the capability run's outputs, averaged across two judge models (deepseek-v4-pro, qwen3.7-max) to dampen single-judge non-determinism.
+
+**Known gaps, documented rather than faked:**
+- *Transcript/process grading* — Anthropic's framework grades tool calls and state changes, not just final output. We have no tool-calling agent harness here; the skills are injected as system prompts into single-turn chat completions. `behavior.py`'s text-pattern probes are the closest analog (they check what the model *said* about its reasoning, not what it *did*) — real transcript grading would require building an actual agentic loop with tools, which is a bigger project, not done here.
+- *Human calibration* — `judge.py`'s rubrics are validated against known good/bad reference pairs (selftest), not against actual human-assigned scores. No human-in-the-loop calibration step exists yet.
 
 ## Architecture
 
 ```
 benchmarks/
-├── selftest.py       ← Validates scorers before API spend
-├── behavior.py       ← Behavioral gate probes (deterministic)
-├── judge.py          ← LLM-as-judge rubric scoring
-├── tasks.py          ← 8 task definitions (2 per skill)
-├── runner.py         ← Full harness (WIP)
-└── results/          ← Timestamped output directories
+├── selftest.py         ← Regression: validates scorers, no API
+├── behavior.py          ← Regression: behavioral gate probes, no API
+├── tasks.py              ← Capability: 8 task definitions (2 per skill)
+├── runner.py            ← Capability: runs tasks via opencode, n=3 trials, writes results.json
+├── opencode_client.py  ← Shared opencode Zen Go endpoint client (used by runner.py + judge.py)
+├── judge.py               ← LLM-as-judge rubric scoring (--selftest validates it; --run scores a completed run)
+├── analyze.py             ← Aggregates results.json into pass@k/pass^k comparison tables
+└── results/              ← Timestamped output directories (results.json, judge_scores.json)
 ```
 
 ## Tasks

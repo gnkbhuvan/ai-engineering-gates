@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""Real benchmark: test each skill via opencode (deepseek-v4-pro), persist results.json.
+"""Capability eval: test each skill via opencode (deepseek-v4-pro), n trials, persist results.json.
+
+This is the CAPABILITY suite (Anthropic's vocabulary: low pass rate expected,
+real model calls). The REGRESSION suite is selftest.py + behavior.py (near-100%,
+no API, run those first).
 
   python benchmarks/runner.py
-      Runs all 8 tasks (no-skill vs. with-skill), writes
-      benchmarks/results/<stamp>/results.json for judge.py --run / analyze.py.
+      Runs all 8 tasks x 2 arms (no-skill, skill) x N_TRIALS trials each.
+      Writes benchmarks/results/<stamp>/results.json for judge.py --run / analyze.py.
+
+Multiple trials per cell because single runs are unreliable (model output varies
+run to run) — see Anthropic's pass@k / pass^k: pass@k = at least one of k trials
+succeeded, pass^k = all k trials succeeded. analyze.py computes both from this file.
 """
 import json, sys, time
 from datetime import datetime
@@ -19,6 +27,7 @@ if not API_KEY:
     sys.exit(1)
 
 MODEL = "deepseek-v4-pro"
+N_TRIALS = 3
 SKILLS_DIR = Path(__file__).resolve().parent.parent
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -56,23 +65,32 @@ for task_id, task in TASKS.items():
         ("no-skill", SYSTEM_BASE),
         ("skill", f"{SYSTEM_BASE}\n\nFollow this skill:\n\n{skill_text}"),
     ):
-        print(f"→ {arm}...", end=" ", flush=True)
-        r = chat(MODEL, sys_prompt, task["prompt"], API_KEY)
-        out, usage = r["text"], r["usage"]
-        print(f"{len(out)} chars")
+        trial_corrects = []
+        for trial in range(N_TRIALS):
+            print(f"→ {arm} trial {trial+1}/{N_TRIALS}...", end=" ", flush=True)
+            t0 = time.perf_counter()
+            r = chat(MODEL, sys_prompt, task["prompt"], API_KEY)
+            latency_s = time.perf_counter() - t0
+            out, usage = r["text"], r["usage"]
+            print(f"{len(out)} chars, {latency_s:.1f}s")
 
-        score = task["score"](out)
-        results.append({
-            "task": task_id,
-            "skill": skill_name,
-            "arm": arm,
-            "score": {"correct": score["correct"], "safe": score["safe"], "reason": score["reason"]},
-            # ponytail: subscription-billed, not metered — cost is always 0, tokens kept for reference.
-            "metadata": {"cost": 0.0, "tokens": {"total": usage.get("total_tokens", 0)}},
-            "output": out,
-        })
-        print(f"   corr={score['correct']} safe={score['safe']} | {score['reason'][:80]}")
-        time.sleep(0.5)
+            score = task["score"](out)
+            trial_corrects.append(score["correct"])
+            results.append({
+                "task": task_id,
+                "skill": skill_name,
+                "arm": arm,
+                "trial": trial,
+                "score": {"correct": score["correct"], "safe": score["safe"], "reason": score["reason"]},
+                # ponytail: subscription-billed, not metered — cost is always 0, tokens/latency kept for reference.
+                "metadata": {"cost": 0.0, "tokens": {"total": usage.get("total_tokens", 0)}, "latency_s": round(latency_s, 2)},
+                "output": out,
+            })
+            time.sleep(0.5)
+
+        pass_at_k = max(trial_corrects)
+        pass_pow_k = min(trial_corrects)
+        print(f"   {arm:10} {sum(trial_corrects)}/{N_TRIALS} correct | pass@{N_TRIALS}={pass_at_k} pass^{N_TRIALS}={pass_pow_k}")
 
 # Persist
 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -80,20 +98,5 @@ out_dir = RESULTS_DIR / stamp
 out_dir.mkdir(parents=True, exist_ok=True)
 (out_dir / "results.json").write_text(json.dumps(results, indent=2))
 print(f"\nSaved: {out_dir / 'results.json'}")
-
-# Summary
-by_task = {}
-for r in results:
-    by_task.setdefault(r["task"], {})[r["arm"]] = r["score"]["correct"]
-nc = sum(1 for v in by_task.values() if v.get("no-skill"))
-wc = sum(1 for v in by_task.values() if v.get("skill"))
-print(f"\n{'='*60}")
-print(f"FINAL: No-skill correct={nc}/{len(by_task)} | With-skill correct={wc}/{len(by_task)}")
-print(f"{'='*60}")
-for task_id, v in by_task.items():
-    d = v.get("skill", 0) - v.get("no-skill", 0)
-    a = "↑" if d > 0 else ("↓" if d < 0 else "→")
-    print(f"  {task_id:20} no={v.get('no-skill')} with={v.get('skill')} {a}")
-
 print(f"\nNext: python benchmarks/judge.py --run {out_dir}")
 print(f"      python benchmarks/analyze.py {out_dir / 'results.json'}")

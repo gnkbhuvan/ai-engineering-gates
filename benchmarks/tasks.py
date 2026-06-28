@@ -465,7 +465,7 @@ def score_rag_task2(output):
         "use pinecone", "recommend pinecone", "go with pinecone",
         "use weaviate", "use qdrant", "use milvus", "set up a new",
         "purpose-built for vector search", "create a pinecone account",
-        "create an index", "install pinecone-client",
+        "create a pinecone index", "install pinecone-client",
     ])
 
     # Bad ref mentions pgvector but recommends Pinecone — caught by has_comparison
