@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
 """LLM-as-judge rubric scoring for subjective skill evaluation axes.
 
-Validated by selftest before any API spend on real runs — see --selftest flag.
+Validated by selftest before any real run — see --selftest flag.
 Judges communication clarity, reasoning quality, and adherence to skill philosophy.
 
   python benchmarks/judge.py --selftest     # validate judge on reference pairs
   python benchmarks/judge.py --run results/<stamp>  # score a completed run
 
-Uses the Anthropic Messages API. Key from .env or ANTHROPIC_API_KEY env var.
+Uses opencode's Zen Go endpoint (subscription, not metered) — two judge models
+(deepseek-v4-pro, qwen3.7-max), scores averaged per Hebbia's "multiple grading
+passes reduce judge non-determinism" approach. Key from OPENCODE_GO_API_KEY env
+var or ~/.hermes/.env.
 """
 
 import argparse
 import json
-import os
 import re
 import sys
-import time
-import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from benchmarks.opencode_client import load_key, chat
+
 RUNS_DIR = Path(__file__).resolve().parent / "results"
-JUDGE_MODEL = "claude-sonnet-4-6"
+JUDGE_MODELS = ("deepseek-v4-pro", "qwen3.7-max")
 
 
 # =============================================================================
@@ -66,49 +68,14 @@ RUBRICS = {
 # Judge infrastructure
 # =============================================================================
 
-def load_key():
-    """Load Anthropic API key from .env or environment."""
-    try:
-        for line in (ROOT / ".env").read_text(encoding="utf-8").splitlines():
-            if line.startswith("ANTHROPIC_API_KEY=") and len(line) > 18:
-                return line.split("=", 1)[1].strip()
-    except Exception:
-        pass
-    return os.environ.get("ANTHROPIC_API_KEY")
-
-
-def judge_call(response_text: str, system_prompt: str, key: str, retries: int = 3) -> str:
-    """Call Anthropic API with the rubric as system prompt."""
-    body = json.dumps({
-        "model": JUDGE_MODEL,
-        "max_tokens": 200,
-        "temperature": 0,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": f"RESPONSE TO EVALUATE:\n\n{response_text}"}],
-    }).encode()
-
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
-                data=body,
-                headers={
-                    "x-api-key": key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=60) as r:
-                j = json.loads(r.read())
-            return j["content"][0]["text"]
-        except Exception as e:
-            if attempt == retries - 1:
-                return f'{{"error": "{str(e)[:120]}"}}'
-            time.sleep(2 * (attempt + 1))
+def judge_call(response_text: str, system_prompt: str, key: str) -> dict[str, str]:
+    """Ask every judge model to score the response. Returns {model: raw_text}."""
+    user_prompt = f"RESPONSE TO EVALUATE:\n\n{response_text}"
+    return {model: chat(model, system_prompt, user_prompt, key, temp=0)["text"] for model in JUDGE_MODELS}
 
 
 def parse_score(text: str) -> int | None:
-    """Extract numeric score from judge response."""
+    """Extract numeric score from a judge response."""
     m = re.search(r"\{.*\}", text or "", re.S)
     if not m:
         return None
@@ -119,25 +86,36 @@ def parse_score(text: str) -> int | None:
         return None
 
 
+def score_response(response_text: str, rubric_name: str, key: str) -> dict:
+    """Score a response against a rubric using all judge models, averaged."""
+    if rubric_name not in RUBRICS:
+        return {"error": f"Unknown rubric: {rubric_name}"}
+
+    raw = judge_call(response_text, RUBRICS[rubric_name], key)
+    per_model = {model: parse_score(text) for model, text in raw.items()}
+    valid = [s for s in per_model.values() if s is not None]
+    avg = sum(valid) / len(valid) if valid else None
+
+    return {"rubric": rubric_name, "score": avg, "scores_by_model": per_model, "raw_by_model": raw}
+
+
 # =============================================================================
 # Selftest
 # =============================================================================
 
 def selftest(key: str | None = None):
-    """Validate the judge: it must rank known good responses above known bad ones.
-
-    Uses reference pairs that a reasonable judge should distinguish.
-    Requires API key (small spend, ~$0.01 for all tests).
+    """Validate the judge: it must rank known good responses above known bad ones
+    on the rubric each pair is meant to exercise. Free — uses the opencode subscription.
     """
     if not key:
         key = load_key()
     if not key:
-        print("No API key found. Set ANTHROPIC_API_KEY env var or create .env file.")
-        print("Selftest for LLM judge requires API calls.")
+        print("No API key found. Set OPENCODE_GO_API_KEY env var or ensure ~/.hermes/.env has it.")
         sys.exit(1)
 
     tests = {
         "clarity": {
+            "rubric": "communication-clarity",
             "good": (
                 "Think of an LLM like a very eager intern who's read every book in the library "
                 "but has never actually done anything. They don't know what's true — they know "
@@ -157,6 +135,7 @@ def selftest(key: str | None = None):
             ),
         },
         "reasoning": {
+            "rubric": "reasoning-depth",
             "good": (
                 "The reason RAG fails here is axiom 3 of prompt engineering: the model assumes "
                 "every token in its prompt is true (truth bias). When your retriever returns "
@@ -173,20 +152,35 @@ def selftest(key: str | None = None):
                 "production RAG systems use."
             ),
         },
+        "simplicity": {
+            "rubric": "simplicity-bias",
+            "good": (
+                "Use Python's built-in @lru_cache on the lookup function. That's it — at "
+                "this volume (a few hundred lookups a day) there's no case for Redis, a "
+                "cache-warming job, or a custom eviction policy. Add a real cache only if "
+                "you measure @lru_cache falling short."
+            ),
+            "bad": (
+                "Stand up a Redis Cluster for caching, with a cache-warming cron job, a "
+                "pub/sub invalidation system, and a custom LRU eviction policy layered on "
+                "top, to cache roughly fifty lookups a day."
+            ),
+        },
     }
 
     passed = 0
     failed = 0
 
     for test_name, pair in tests.items():
-        good_score = parse_score(judge_call(pair["good"], RUBRICS["reasoning-depth"], key))
-        bad_score = parse_score(judge_call(pair["bad"], RUBRICS["reasoning-depth"], key))
+        good = score_response(pair["good"], pair["rubric"], key)
+        bad = score_response(pair["bad"], pair["rubric"], key)
+        good_score, bad_score = good["score"], bad["score"]
 
         if good_score is not None and bad_score is not None and good_score > bad_score:
-            print(f"ok  {test_name:20} good={good_score} > bad={bad_score}")
+            print(f"ok  {test_name:12} [{pair['rubric']}] good={good_score} > bad={bad_score}")
             passed += 1
         else:
-            print(f"XX  {test_name:20} good={good_score} bad={bad_score} (good should be > bad)")
+            print(f"XX  {test_name:12} [{pair['rubric']}] good={good_score} bad={bad_score} (good should be > bad)")
             failed += 1
 
     print(f"\n---")
@@ -199,14 +193,32 @@ def selftest(key: str | None = None):
         sys.exit(0)
 
 
-def score_response(response_text: str, rubric_name: str, key: str) -> dict:
-    """Score a single response against a rubric."""
-    if rubric_name not in RUBRICS:
-        return {"error": f"Unknown rubric: {rubric_name}"}
+# =============================================================================
+# Run scoring
+# =============================================================================
 
-    result = judge_call(response_text, RUBRICS[rubric_name], key)
-    score = parse_score(result)
-    return {"rubric": rubric_name, "score": score, "raw_judge_response": result}
+def run_judge(run_dir: str, key: str | None = None):
+    """Score every output in a completed run's results.json against all rubrics."""
+    if not key:
+        key = load_key()
+    if not key:
+        print("No API key found. Set OPENCODE_GO_API_KEY env var or ensure ~/.hermes/.env has it.")
+        sys.exit(1)
+
+    results_path = Path(run_dir) / "results.json"
+    if not results_path.exists():
+        print(f"No results.json in {run_dir} — run benchmarks/runner.py first.")
+        sys.exit(1)
+
+    records = json.loads(results_path.read_text())
+    for r in records:
+        r["rubrics"] = {name: score_response(r["output"], name, key) for name in RUBRICS}
+        scores = ", ".join(f"{name}={r['rubrics'][name]['score']}" for name in RUBRICS)
+        print(f"{r['task']:15} [{r['arm']:8}] {scores}")
+
+    out_path = Path(run_dir) / "judge_scores.json"
+    out_path.write_text(json.dumps(records, indent=2))
+    print(f"\nSaved: {out_path}")
 
 
 if __name__ == "__main__":
@@ -218,8 +230,7 @@ if __name__ == "__main__":
     if args.selftest:
         selftest()
     elif args.run:
-        print(f"LLM judge for run: {args.run}")
-        print("(Full implementation: iterate over result files, score each, write judge_scores.json)")
+        run_judge(args.run)
     else:
         print("Usage: python benchmarks/judge.py --selftest")
         print("       python benchmarks/judge.py --run results/<stamp>")

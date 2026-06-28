@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="assets/cartographer.png" width="768" alt="Cartographer">
+  <img src="assets/banner.png" width="900" alt="AI Engineering Gates">
 </p>
 
-# Cartographer
+# AI Engineering Gates
 
-*The crow has surveyed this terrain. What you're about to build — it's seen the failure modes already.*
+*Four gates between you and shipping AI the wrong way.*
 
 ---
 
@@ -125,7 +125,7 @@ Each skill has deep-dive references loaded only when a specific topic needs them
 ### skills.sh (all agents)
 
 ```bash
-npx skills add gnkbhuvan/cartographer
+npx skills add gnkbhuvan/ai-engineering-gates
 ```
 
 One command. Works across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, VS Code, Zed, and 20+ other agents. The skill is installed and auto-loaded on session start.
@@ -133,8 +133,8 @@ One command. Works across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, VS C
 ### Claude Code
 
 ```
-/plugin marketplace add gnkbhuvan/cartographer
-/plugin install cartographer@cartographer
+/plugin marketplace add gnkbhuvan/ai-engineering-gates
+/plugin install ai-engineering-gates@ai-engineering-gates
 ```
 
 Send as two separate messages.
@@ -142,7 +142,7 @@ Send as two separate messages.
 ### Manual
 
 ```bash
-git clone https://github.com/gnkbhuvan/cartographer.git ~/.claude/skills/cartographer
+git clone https://github.com/gnkbhuvan/ai-engineering-gates.git ~/.claude/skills/ai-engineering-gates
 ```
 
 Point your agent at the SKILL.md for the skill you need. The root `AGENTS.md` is auto-loaded by most agents.
@@ -161,8 +161,8 @@ python benchmarks/runner.py --all --runs 3
 ## Repo
 
 ```
-ai-skills/
-├── cartographer.png              # The crow. Surveys before you build.
+ai-engineering-gates/
+├── banner.png                    # Four gates, one per skill
 ├── AGENTS.md                     # Agent directive
 ├── README.md
 ├── prompt-engineering/           # Prompt design, debugging, evaluation

@@ -1,41 +1,26 @@
 #!/usr/bin/env python3
-"""Real benchmark: test each skill via Deepseek API."""
-import json, os, sys, time, urllib.request, ssl
-from pathlib import Path
+"""Real benchmark: test each skill via opencode (deepseek-v4-pro), persist results.json.
 
-# macOS SSL workaround
-SSL_CONTEXT = ssl.create_default_context()
-try:
-    import certifi
-    SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
-except ImportError:
-    pass
+  python benchmarks/runner.py
+      Runs all 8 tasks (no-skill vs. with-skill), writes
+      benchmarks/results/<stamp>/results.json for judge.py --run / analyze.py.
+"""
+import json, sys, time
+from datetime import datetime
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from benchmarks.tasks import TASKS
+from benchmarks.opencode_client import load_key, chat
 
-# Load API key: try env first, then Hermes .env file
-def _load_key():
-    k = os.environ.get("OPENCODE_GO_API_KEY", "").strip()
-    if k: return k
-    try:
-        for line in open(os.path.expanduser("~/.hermes/.env"), "r"):
-            # line format: OPENCODE_GO_API_KEY=sk-...
-            if line.startswith("OPENCODE_GO_API_KEY="):
-                k = line.split("=", 1)[1].strip()
-                if k: return k
-    except Exception:
-        pass
-    return ""
-
-API_KEY = _load_key()
+API_KEY = load_key()
 if not API_KEY:
     print("No API key. Set OPENCODE_GO_API_KEY or ensure ~/.hermes/.env has it.")
     sys.exit(1)
 
-BASE_URL = "https://opencode.ai/zen/go/v1"
 MODEL = "deepseek-v4-pro"
 SKILLS_DIR = Path(__file__).resolve().parent.parent
+RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
 def load_skill(name):
     p = SKILLS_DIR / name / "SKILL.md"
@@ -54,25 +39,6 @@ TASK_SKILL = {
     "rag-necessity": "production-rag", "rag-vectordb": "production-rag",
 }
 
-def call(system_prompt, user_prompt, temp=0.3):
-    body = json.dumps({
-        "model": MODEL, "temperature": temp,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    }).encode()
-    req = urllib.request.Request(
-        f"{BASE_URL}/chat/completions", data=body,
-        headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=180, context=SSL_CONTEXT) as r:
-            resp = json.loads(r.read())
-        return resp["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"API_ERROR: {e}"
-
 results = []
 SYSTEM_BASE = "You are an AI engineer. Be concise."
 
@@ -86,37 +52,48 @@ for task_id, task in TASKS.items():
     print(f"TASK: {task_id} ({skill_name})")
     print(f"{'='*60}")
 
-    # Without skill
-    print("→ Without skill...", end=" ", flush=True)
-    out_no = call(SYSTEM_BASE, task["prompt"])
-    print(f"{len(out_no)} chars")
+    for arm, sys_prompt in (
+        ("no-skill", SYSTEM_BASE),
+        ("skill", f"{SYSTEM_BASE}\n\nFollow this skill:\n\n{skill_text}"),
+    ):
+        print(f"→ {arm}...", end=" ", flush=True)
+        r = chat(MODEL, sys_prompt, task["prompt"], API_KEY)
+        out, usage = r["text"], r["usage"]
+        print(f"{len(out)} chars")
 
-    # With skill
-    print("→ With skill...", end=" ", flush=True)
-    sys_with = f"{SYSTEM_BASE}\n\nFollow this skill:\n\n{skill_text}"
-    out_with = call(sys_with, task["prompt"])
-    print(f"{len(out_with)} chars")
+        score = task["score"](out)
+        results.append({
+            "task": task_id,
+            "skill": skill_name,
+            "arm": arm,
+            "score": {"correct": score["correct"], "safe": score["safe"], "reason": score["reason"]},
+            # ponytail: subscription-billed, not metered — cost is always 0, tokens kept for reference.
+            "metadata": {"cost": 0.0, "tokens": {"total": usage.get("total_tokens", 0)}},
+            "output": out,
+        })
+        print(f"   corr={score['correct']} safe={score['safe']} | {score['reason'][:80]}")
+        time.sleep(0.5)
 
-    scorer = task["score"]
-    s_no = scorer(out_no)
-    s_with = scorer(out_with)
-
-    results.append({
-        "task": task_id, "skill": skill_name,
-        "no_skill": {"correct": s_no["correct"], "safe": s_no["safe"], "reason": s_no["reason"], "len": len(out_no)},
-        "with_skill": {"correct": s_with["correct"], "safe": s_with["safe"], "reason": s_with["reason"], "len": len(out_with)},
-    })
-    print(f"   NO skill:  corr={s_no['correct']} safe={s_no['safe']} | {s_no['reason'][:80]}")
-    print(f"   WITH skill: corr={s_with['correct']} safe={s_with['safe']} | {s_with['reason'][:80]}")
-    time.sleep(0.5)
+# Persist
+stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+out_dir = RESULTS_DIR / stamp
+out_dir.mkdir(parents=True, exist_ok=True)
+(out_dir / "results.json").write_text(json.dumps(results, indent=2))
+print(f"\nSaved: {out_dir / 'results.json'}")
 
 # Summary
-nc = sum(1 for r in results if r["no_skill"]["correct"])
-wc = sum(1 for r in results if r["with_skill"]["correct"])
-print(f"\n{'='*60}")
-print(f"FINAL: No-skill correct={nc}/{len(results)} | With-skill correct={wc}/{len(results)}")
-print(f"{'='*60}")
+by_task = {}
 for r in results:
-    d = r["with_skill"]["correct"] - r["no_skill"]["correct"]
+    by_task.setdefault(r["task"], {})[r["arm"]] = r["score"]["correct"]
+nc = sum(1 for v in by_task.values() if v.get("no-skill"))
+wc = sum(1 for v in by_task.values() if v.get("skill"))
+print(f"\n{'='*60}")
+print(f"FINAL: No-skill correct={nc}/{len(by_task)} | With-skill correct={wc}/{len(by_task)}")
+print(f"{'='*60}")
+for task_id, v in by_task.items():
+    d = v.get("skill", 0) - v.get("no-skill", 0)
     a = "↑" if d > 0 else ("↓" if d < 0 else "→")
-    print(f"  {r['task']:20} no={r['no_skill']['correct']} with={r['with_skill']['correct']} {a} | no_len={r['no_skill']['len']:4d} with_len={r['with_skill']['len']:4d}")
+    print(f"  {task_id:20} no={v.get('no-skill')} with={v.get('skill')} {a}")
+
+print(f"\nNext: python benchmarks/judge.py --run {out_dir}")
+print(f"      python benchmarks/analyze.py {out_dir / 'results.json'}")

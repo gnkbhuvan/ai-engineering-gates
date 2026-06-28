@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cartographer Benchmark Harness.
+"""AI Engineering Gates Benchmark Harness.
 
 Runs each (task x skill-arm x model) cell and scores the output deterministically.
 Inspired by ponytail's benchmarks/agentic/run.py — but adapted for SKILL evaluation
@@ -58,13 +58,13 @@ def build_prompt(task: dict, skill_text: str | None) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cartographer Benchmark Harness")
+    parser = argparse.ArgumentParser(description="AI Engineering Gates Benchmark Harness")
     sub = parser.add_subparsers(dest="command")
 
     # Placeholder — full implementation follows ponytail's pattern
     # See benchmarks/runner.py for the full harness
 
-    print("Cartographer Benchmark — see SKILL-EVALUATION-FRAMEWORK.md for methodology")
+    print("AI Engineering Gates Benchmark — see benchmarks/README.md for methodology")
     print("Run: python benchmarks/selftest.py  (validate instruments, no API)")
     print("Run: python benchmarks/runner.py --help  (full harness)")
 

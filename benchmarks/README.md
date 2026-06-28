@@ -1,4 +1,4 @@
-# Cartographer Benchmarks
+# AI Engineering Gates Benchmarks
 
 *Automated evaluation of the 4 AI skills: prompt-engineering, agentic-ai, fastapi-genai, production-rag.*
 
@@ -11,17 +11,20 @@ python benchmarks/selftest.py
 # 2. Validate behavioral probes (no API)
 python benchmarks/behavior.py --selftest
 
-# 3. Validate LLM judge (small API spend, ~$0.02)
-#    Requires ANTHROPIC_API_KEY in .env or env var
+# 3. Validate LLM judge (opencode subscription, OPENCODE_GO_API_KEY)
 python benchmarks/judge.py --selftest
 
-# 4. Run the full evaluation (API spend)
-#    python benchmarks/runner.py --all --runs 5
+# 4. Run the full evaluation
+python benchmarks/runner.py
+
+# 5. Score the run's outputs against the rubrics + compare arms
+python benchmarks/judge.py --run benchmarks/results/<stamp>
+python benchmarks/analyze.py benchmarks/results/<stamp>/results.json
 ```
 
 ## How it works
 
-See `SKILL-EVALUATION-FRAMEWORK.md` for the full methodology. Quick summary:
+Quick summary:
 
 1. **Selftest** validates every scorer — good reference passes, bad reference fails on its declared axis
 2. **Behavioral gates** verify each skill actually changes agent behavior (not just carries text)
@@ -56,7 +59,6 @@ benchmarks/
 
 ## References
 
-- [SKILL-EVALUATION-FRAMEWORK.md](../SKILL-EVALUATION-FRAMEWORK.md) — Full methodology and research foundation
 - [Ponytail benchmarks](https://github.com/DietrichGebert/ponytail/tree/main/benchmarks) — The inspiration
 - [Hebbia's evaluation framework](https://www.hebbia.com/blog/evaluating-ai-agents-a-hybrid-deterministic-and-rubric-based-framework)
 - [arXiv:2507.21504](https://arxiv.org/abs/2507.21504) — Survey on LLM Agent Evaluation

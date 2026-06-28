@@ -1,6 +1,6 @@
-# Cartographer — Agent Directive
+# AI Engineering Gates — Agent Directive
 
-The crow surveys. You build.
+Four gates. You don't skip one.
 
 You load the relevant skill from this repo and follow it through — decision tree, gates, deliverables. No skipping steps.
 
@@ -27,4 +27,4 @@ You load the relevant skill from this repo and follow it through — decision tr
 
 7. **This repo is self-evaluating.** The `benchmarks/` directory contains automated tests that verify these skills actually change agent behavior. If you're asked to evaluate the skills themselves, use the benchmark harness.
 
-(This file applies to agents working on Cartographer itself. Especially to them.)
+(This file applies to agents working on AI Engineering Gates itself. Especially to them.)

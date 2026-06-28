@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavioral gate probes for Cartographer.
+"""Behavioral gate probes for AI Engineering Gates.
 
 Verifies each skill actually changes agent BEHAVIOR, not just carries text.
 Each probe targets a specific skill rule that matters. A skill that scores

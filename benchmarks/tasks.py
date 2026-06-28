@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Task definitions for Cartographer evaluation.
+"""Task definitions for AI Engineering Gates evaluation.
 
 Each task has:
   prompt   — instruction to the agent (the skill is injected separately)
